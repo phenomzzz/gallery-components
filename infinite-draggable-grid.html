@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Infinite Draggable Grid</title>
+<!-- Infinite Draggable Grid: endless photo wall in both axes from a recycled tile pool; drag / throw / wheel, click a tile to expand it.
+     Needs only GSAP 3.13.0 core (no plugins). -->
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/gsap.min.js" integrity="sha384-HOvlOYPIs/zjoIkWUGXkVmXsjr8GuZLV+Q+rcPwmJOVZVpvTSXQChiN4t9Euv9Vc" crossorigin="anonymous"></script>
+<script>
+/* ---- shared helpers (identical in all four files) ---- */
+const KIT = {
+  /* seeded placeholder photo: same seed, same picture. Swap for real assets. */
+  img: (seed, w = 800, h = 1000) => `https://picsum.photos/seed/gallery${seed}/${w}/${h}`,
+  words: ['Atlas', 'Meridian', 'Halcyon', 'Cobalt', 'Saffron', 'Verdant', 'Obsidian', 'Lumen', 'Ember', 'Solace', 'Tidal', 'Ochre'],
+  rand: (a, b) => a + Math.random() * (b - a),
+  clamp: (v, a, b) => Math.max(a, Math.min(b, v)),
+  lerp: (a, b, t) => a + (b - a) * t,
+  $: (s, r = document) => r.querySelector(s),
+  $$: (s, r = document) => [...r.querySelectorAll(s)],
+};
+</script>
+<style>
+  /* ---- shared base (identical in all four files) ---- */
+  :root {
+    --bg: #0d0d0f; --bg2: #16161a; --line: #2c2c33;
+    --fg: #f3f1ec; --dim: #8a8a93;
+    --ease: cubic-bezier(.65,0,.35,1);
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, sans-serif;
+    --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+  body { min-height: 100vh; }
+  img { display: block; max-width: 100%; }
+  button { font: inherit; color: inherit; }
+  .eyebrow { font: 12px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); }
+  .h2 { font-size: clamp(32px, 5.5vw, 76px); font-weight: 600; letter-spacing: -.035em; line-height: 1; margin: 0; }
+  .hint { font: 12px/1.4 var(--mono); color: var(--dim); letter-spacing: .06em; }
+  .round { width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; display: grid; place-items: center; font-size: 18px; }
+  .round:hover { background: var(--bg2); }
+
+  /* ---- component ---- */
+  body { overflow: hidden; }
+  .grid-container { position: fixed; inset: 0; cursor: grab; touch-action: none; overflow: hidden; }
+  .grid-container.drag { cursor: grabbing; }
+  .tile { position: absolute; left: 0; top: 0; width: 220px; height: 280px; border-radius: 10px; overflow: hidden; }
+  .tile img { width: 100%; height: 100%; object-fit: cover; pointer-events: none; transition: transform .5s var(--ease); }
+  .tile:hover img { transform: scale(1.06); }
+  .detail { position: fixed; z-index: 40; overflow: hidden; border-radius: 10px; display: none; cursor: zoom-out; }
+  .detail img { width: 100%; height: 100%; object-fit: cover; }
+  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.8); z-index: 39; opacity: 0; pointer-events: none; }
+  .hud { position: fixed; left: 20px; bottom: 20px; z-index: 5; }
+</style>
+</head>
+<body>
+<div class="grid-container"></div>
+<div class="scrim"></div><div class="detail"><img alt=""></div>
+<div class="hud"><p class="eyebrow">Infinite draggable grid</p><p class="hint">drag / throw / wheel in any direction · click a tile</p></div>
+<script>
+// a fixed pool of tiles is recycled by wrapping their positions, so the grid feels endless in both axes
+const TW = 220, TH = 280, GAP = 24, CW = TW + GAP, CH = TH + GAP;
+const root = KIT.$('.grid-container');
+let cols, rows, tiles = [];
+function build() {
+  root.innerHTML = ''; tiles = [];
+  cols = Math.ceil(innerWidth / CW) + 2; rows = Math.ceil(innerHeight / CH) + 2;
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    const el = document.createElement('div'); el.className = 'tile'; root.appendChild(el);
+    tiles.push({ el, c, r, seed: -1 });
+  }
+}
+build(); addEventListener('resize', build);
+const cam = { x: 0, y: 0 }, vel = { x: 0, y: 0 };
+let dragging = false, moved = 0, last;
+function render() {
+  const W = cols * CW, H = rows * CH;
+  tiles.forEach(t => {
+    const x = gsap.utils.wrap(-CW, W - CW, t.c * CW - cam.x + (t.r % 2) * CW / 2), y = gsap.utils.wrap(-CH, H - CH, t.r * CH - cam.y);
+    // which world cell is this tile showing? pick a deterministic image for it
+    const wc = Math.round((x + cam.x - (t.r % 2) * CW / 2) / CW), wr = Math.round((y + cam.y) / CH);
+    const seed = ((wc * 73856093) ^ (wr * 19349663)) >>> 0;
+    if (seed !== t.seed) { t.seed = seed; t.el.innerHTML = `<img src="${KIT.img(seed % 300, 440, 560)}" alt="">`; }
+    t.el.style.transform = `translate(${x}px, ${y}px)`;
+  });
+}
+gsap.ticker.add(() => {
+  if (!dragging) { cam.x += vel.x; cam.y += vel.y; vel.x *= .93; vel.y *= .93; }
+  render();
+});
+root.addEventListener('pointerdown', e => { dragging = true; moved = 0; last = [e.clientX, e.clientY]; vel.x = vel.y = 0; root.classList.add('drag'); root.setPointerCapture(e.pointerId); });
+root.addEventListener('pointermove', e => { if (!dragging) return; const dx = e.clientX - last[0], dy = e.clientY - last[1]; last = [e.clientX, e.clientY]; cam.x -= dx; cam.y -= dy; vel.x = -dx; vel.y = -dy; moved += Math.abs(dx) + Math.abs(dy); });
+root.addEventListener('pointerup', e => {
+  dragging = false; root.classList.remove('drag');
+  if (moved < 6) { root.releasePointerCapture(e.pointerId); const t = document.elementFromPoint(e.clientX, e.clientY)?.closest('.tile'); t && open(t); }
+});
+addEventListener('wheel', e => { vel.x += e.deltaX * .08; vel.y += e.deltaY * .08; }, { passive: true });
+const det = KIT.$('.detail'), scrim = KIT.$('.scrim');
+let from = null;
+function open(t) {
+  from = t; const r = t.getBoundingClientRect(), H = innerHeight * .8, W = H * TW / TH;
+  KIT.$('img', det).src = KIT.$('img', t).src.replace('/440/560', '/880/1120');
+  gsap.set(det, { display: 'block', left: r.left, top: r.top, width: r.width, height: r.height });
+  gsap.to(det, { left: (innerWidth - W) / 2, top: (innerHeight - H) / 2, width: W, height: H, duration: .9, ease: 'expo.inOut' });
+  gsap.to(scrim, { opacity: 1, pointerEvents: 'auto', duration: .5 });
+}
+function close() { const r = from.getBoundingClientRect(); gsap.to(det, { left: r.left, top: r.top, width: r.width, height: r.height, duration: .7, ease: 'expo.inOut', onComplete: () => gsap.set(det, { display: 'none' }) }); gsap.to(scrim, { opacity: 0, pointerEvents: 'none', duration: .4 }); }
+det.onclick = close; scrim.onclick = close; addEventListener('keydown', e => e.key === 'Escape' && from && close());
+vel.x = 18; vel.y = 10;   // a little drift on load
+</script>
+</body>
+</html>

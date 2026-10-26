@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scale Slider</title>
+<!-- Scale Slider: looping card slider where neighbours shrink, dim and tuck in behind the focused card; drag / wheel / buttons / arrow keys.
+     Needs only GSAP 3.13.0 core (no plugins). -->
+<script src="https://cdn.jsdelivr.net/npm/gsap@3.13.0/dist/gsap.min.js" integrity="sha384-HOvlOYPIs/zjoIkWUGXkVmXsjr8GuZLV+Q+rcPwmJOVZVpvTSXQChiN4t9Euv9Vc" crossorigin="anonymous"></script>
+<script>
+/* ---- shared helpers (identical in all four files) ---- */
+const KIT = {
+  /* seeded placeholder photo: same seed, same picture. Swap for real assets. */
+  img: (seed, w = 800, h = 1000) => `https://picsum.photos/seed/gallery${seed}/${w}/${h}`,
+  words: ['Atlas', 'Meridian', 'Halcyon', 'Cobalt', 'Saffron', 'Verdant', 'Obsidian', 'Lumen', 'Ember', 'Solace', 'Tidal', 'Ochre'],
+  rand: (a, b) => a + Math.random() * (b - a),
+  clamp: (v, a, b) => Math.max(a, Math.min(b, v)),
+  lerp: (a, b, t) => a + (b - a) * t,
+  $: (s, r = document) => r.querySelector(s),
+  $$: (s, r = document) => [...r.querySelectorAll(s)],
+};
+</script>
+<style>
+  /* ---- shared base (identical in all four files) ---- */
+  :root {
+    --bg: #0d0d0f; --bg2: #16161a; --line: #2c2c33;
+    --fg: #f3f1ec; --dim: #8a8a93;
+    --ease: cubic-bezier(.65,0,.35,1);
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, sans-serif;
+    --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+  body { min-height: 100vh; }
+  img { display: block; max-width: 100%; }
+  button { font: inherit; color: inherit; }
+  .eyebrow { font: 12px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); }
+  .h2 { font-size: clamp(32px, 5.5vw, 76px); font-weight: 600; letter-spacing: -.035em; line-height: 1; margin: 0; }
+  .hint { font: 12px/1.4 var(--mono); color: var(--dim); letter-spacing: .06em; }
+  .round { width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; display: grid; place-items: center; font-size: 18px; }
+  .round:hover { background: var(--bg2); }
+
+  /* ---- component ---- */
+  body { overflow: hidden; }
+  .scale-slider-scene { position: fixed; inset: 0; cursor: grab; touch-action: none; overflow: hidden; }
+  .scale-slider-card { position: absolute; left: 50%; top: 50%; width: min(420px, 64vw); aspect-ratio: 3/4; border-radius: 20px; overflow: hidden; will-change: transform; }
+  .scale-slider-card img { position: absolute; inset: -6% -12%; width: 124%; height: 112%; object-fit: cover; pointer-events: none; }
+  .label { position: absolute; left: 20px; bottom: 18px; font-weight: 600; font-size: 20px; text-shadow: 0 2px 20px rgba(0,0,0,.6); }
+  .nav { position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px; z-index: 10; }
+</style>
+</head>
+<body>
+<div class="scale-slider-scene"></div>
+<div class="nav"><button class="round" data-prev>←</button><button class="round" data-next>→</button></div>
+<script>
+const N = 9, scene = KIT.$('.scale-slider-scene');
+scene.innerHTML = Array.from({ length: N }, (_, i) => `<div class="scale-slider-card"><img src="${KIT.img(2500 + i, 600, 800)}" alt=""><span class="label">${KIT.words[i]}</span></div>`).join('');
+const cards = KIT.$$('.scale-slider-card');
+const CFG = { gap: .62, minScale: .55, focusY: 0, parallax: 12, autoplay: 0 };
+let pos = 0, target = 0;
+function render() {
+  const w = cards[0].offsetWidth, h = cards[0].offsetHeight;
+  cards.forEach((c, i) => {
+    let d = gsap.utils.wrap(-N / 2, N / 2, i - pos);         // slot distance from focus
+    const ad = Math.abs(d), s = Math.max(CFG.minScale, 1 - ad * .22);
+    // spacing compresses as cards shrink, so neighbours tuck in behind the focused card
+    const x = Math.sign(d) * (1 - Math.pow(.62, ad)) / (1 - .62) * w * CFG.gap;
+    gsap.set(c, { x: x - w / 2, y: -h / 2 + ad * 18, scale: s, zIndex: 100 - Math.round(ad * 10), opacity: ad > 3.2 ? 0 : 1, filter: `brightness(${1 - Math.min(ad, 3) * .18})` });
+    gsap.set(KIT.$('img', c), { xPercent: -d * CFG.parallax * .6 });
+  });
+}
+gsap.ticker.add(() => { pos = KIT.lerp(pos, target, .09); render(); });
+let drag = false, lx = 0;
+scene.addEventListener('pointerdown', e => { drag = true; lx = e.clientX; scene.setPointerCapture(e.pointerId); });
+scene.addEventListener('pointermove', e => { if (!drag) return; target -= (e.clientX - lx) / (cards[0].offsetWidth * .6); lx = e.clientX; });
+scene.addEventListener('pointerup', () => { drag = false; target = Math.round(target); });
+let wt; addEventListener('wheel', e => { target += (e.deltaY + e.deltaX) * .004; clearTimeout(wt); wt = setTimeout(() => target = Math.round(target), 150); }, { passive: true });
+KIT.$('[data-next]').onclick = () => target = Math.round(target) + 1;
+KIT.$('[data-prev]').onclick = () => target = Math.round(target) - 1;
+addEventListener('keydown', e => { if (e.altKey) return; if (e.key === 'ArrowRight') target = Math.round(target) + 1; if (e.key === 'ArrowLeft') target = Math.round(target) - 1; });
+pos = -3; render();
+</script>
+</body>
+</html>
